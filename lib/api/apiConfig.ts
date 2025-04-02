@@ -1,0 +1,18 @@
+APPOINTMENTS: {
+  BASE: '/appointments',
+  PATIENT: (patientId: number) => `/appointments/patient/${patientId}`,
+  DOCTOR: (doctorId: number) => `/appointments/doctor/${doctorId}`,
+  DETAIL: (appointmentId: number) => `/appointments/${appointmentId}`,
+  CREATE: '/appointments/create',
+  UPDATE: (appointmentId: number) => `/appointments/${appointmentId}`,
+  DELETE: (appointmentId: number) => `/appointments/${appointmentId}`,
+},
+IOT: {
+  BASE: '/iot',
+  DOCTOR_DEVICES: (doctorId: number) => `/iot/devices/doctor/${doctorId}`,
+  PATIENT_DEVICES: (patientId: number) => `/iot/devices/patient/${patientId}`,
+  DEVICE: (deviceId: string) => `/iot/devices/${deviceId}`,
+  DEVICE_READINGS: (deviceId: string, limit: number = 10) => `/iot/readings/${deviceId}?limit=${limit}`,
+  SEND_COMMAND: (deviceId: string) => `/iot/command/${deviceId}`,
+  LINK_DEVICE: '/iot/link-device',
+}, 
