@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { API_CONFIG } from '../config';
+import { AuthService } from './auth';
 
 // Interfaces para datos IoT
 export interface IoTData {
@@ -62,13 +63,14 @@ export const IoTService = {
         };
       }
       
-      const headers = await this.getAuthHeaders();
+      // No necesitamos autenticación para endpoints IoT, pero incluimos headers básicos
+      const headers = {
+        'Content-Type': 'application/json'
+      };
       
       // Usar URL completa para el endpoint
       const fullEndpoint = `${API_CONFIG.BASE_URL}/iot/command`;
       console.log(`[API] Haciendo petición a: ${fullEndpoint}`);
-      
-      if (headers.Authorization) console.log(`[API] Con token de autorización presente`);
       
       const response = await fetch(fullEndpoint, {
         method: 'POST',

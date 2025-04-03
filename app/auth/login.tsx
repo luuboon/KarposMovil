@@ -27,43 +27,48 @@ export default function Login() {
       Alert.alert('Error', 'Por favor ingresa tu correo y contraseña');
       return;
     }
-
+    
     try {
       setLoading(true);
       setError('');
-
-      // Crear objeto de credenciales en el formato correcto
-      const credentials: LoginDTO = {
-        email: email.trim(),
-        password: password
-      };
       
-      // Intentar login
-      await login(credentials);
-      router.replace('/(tabs)');
-    } catch (err: any) {
-      console.error('Error en login:', err);
-      
-      // Mensaje de error más claro basado en el tipo de error
-      if (err.message && err.message.includes('tiempo')) {
-        Alert.alert('Error de conexión', 'No se pudo conectar al servidor. Verifica tu conexión a internet e intenta nuevamente.');
-      } else if (err.message && err.message.includes('credenciales')) {
-        Alert.alert('Error', 'Credenciales incorrectas. Verifica tu email y contraseña.');
-      } else {
-        Alert.alert('Error', err.message || 'No se pudo iniciar sesión');
+      // Verificar conexión a internet antes de intentar login
+      const isConnected = await NetworkService.hasInternetConnection();
+      if (!isConnected) {
+        setError('No hay conexión a internet. Verifica tu conexión y vuelve a intentarlo.');
+        return;
       }
+      
+      const success = await login(email, password);
+      
+      if (success) {
+        console.log('Login exitoso, redirigiendo...');
+        router.replace('/(tabs)');
+      } else {
+        // El mensaje de error ya fue manejado por login en AuthContext
+        console.log('Login fallido');
+        Alert.alert('Error de autenticación', 'No se pudo iniciar sesión con las credenciales proporcionadas. Verifica tu correo y contraseña.');
+      }
+    } catch (error) {
+      console.error('Error en handleLogin:', error);
+      setError('Ocurrió un error inesperado durante el inicio de sesión. Por favor, intenta nuevamente.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Solo mostrar errores si hay uno específico que no sea de conexión
+  // Mostrar errores si existen
   const renderErrorMessage = () => {
-    if (!error || error.includes('conexión')) return null;
+    if (!error) return null;
     
     return (
       <View style={styles.errorContainer}>
         <Text style={styles.errorText}>{error}</Text>
+        {error.includes('conexión') && (
+          <Text style={styles.errorSubtext}>
+            Verifica tu conexión a internet e intenta nuevamente.
+          </Text>
+        )}
       </View>
     );
   };
@@ -212,5 +217,10 @@ const styles = StyleSheet.create({
     color: '#D32F2F',
     textAlign: 'center',
     marginBottom: 8,
+  },
+  errorSubtext: {
+    color: '#D32F2F',
+    textAlign: 'center',
+    marginTop: 8,
   },
 }); 

@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Patient } from './patients';
 import { Appointment } from './appointments';
 import * as SecureStore from 'expo-secure-store';
+import { AuthService } from './auth';
 
 export interface Doctor {
   id_dc: number;
@@ -28,69 +29,83 @@ interface LatestAppointmentResult {
 }
 
 export const DoctorService = {
-  async getAuthHeaders() {
-    const token = await SecureStore.getItemAsync('accessToken');
-    
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    };
-  },
-
   /**
    * Obtiene el perfil del doctor actual
    * @returns Información del doctor
    */
   async getMyProfile(): Promise<Doctor> {
     try {
-      const userId = await ApiClient.getUserId();
-      console.log(`Obteniendo perfil de doctor con ID de usuario: ${userId}`);
+      const userId = await AuthService.getUserId();
+      console.log(`[Doctor] Obteniendo perfil de doctor con ID de usuario: ${userId}`);
       
       if (!userId) {
         throw new Error('No se pudo obtener el ID de usuario');
       }
       
-      // Solicitud a la API para obtener perfil por ID de usuario
-      const endpoint = `${API_CONFIG.ENDPOINTS.DOCTORS}/user/${userId}`;
-      console.log(`Solicitando datos del doctor a: ${endpoint}`);
+      // Primero intentar obtener la lista completa de doctores
+      console.log(`[Doctor] Solicitando lista completa de doctores`);
       
-      const response = await ApiClient.request(endpoint);
-      console.log('Respuesta de perfil de doctor (completa):', JSON.stringify(response));
+      // Usar URL directa para evitar 404
+      const directEndpoint = `${API_CONFIG.BASE_URL}/doctors`;
+      console.log(`[Doctor] Solicitando datos a: ${directEndpoint}`);
       
-      if (Array.isArray(response) && response.length > 0) {
-        console.log('Perfil doctor encontrado:', JSON.stringify(response[0]));
-        return response[0] as Doctor;
-      } else if (response && typeof response === 'object') {
-        console.log('Perfil doctor encontrado (objeto):', JSON.stringify(response));
-        return response as Doctor;
+      const headers = await AuthService.getAuthHeaders();
+      const response = await fetch(directEndpoint, { headers });
+      
+      if (!response.ok) {
+        throw new Error(`Error HTTP: ${response.status}`);
+      }
+      
+      const doctors = await response.json();
+      console.log(`[Doctor] Se encontraron ${Array.isArray(doctors) ? doctors.length : 0} doctores`);
+      
+      // Buscar el doctor que coincida con el ID de usuario
+      if (Array.isArray(doctors) && doctors.length > 0) {
+        const myDoctor = doctors.find(doc => doc.id_us === userId);
+        
+        if (myDoctor) {
+          console.log('[Doctor] Doctor encontrado por id_us:', JSON.stringify(myDoctor));
+          return myDoctor;
+        }
+      }
+      
+      // Si no se encuentra, intentar con el primer doctor si existe (solo para desarrollo)
+      if (Array.isArray(doctors) && doctors.length > 0) {
+        console.log('[Doctor] Usando primer doctor de la lista para desarrollo:', JSON.stringify(doctors[0]));
+        return doctors[0];
       }
       
       throw new Error('No se encontraron datos del doctor para este usuario');
     } catch (error) {
-      console.error('Error detallado al obtener perfil de doctor:', error);
+      console.error('[Doctor] Error al obtener perfil de doctor:', error);
       
-      // Intentar con endpoint alternativo
+      // Intentar con endpoint alternativo (endpoint antiguo por compatibilidad)
       try {
-        console.log('Intentando obtener perfil de doctor con endpoint alternativo');
-        const userId = await ApiClient.getUserId();
+        console.log('[Doctor] Intentando obtener perfil con ruta específica de usuario');
+        
+        const userId = await AuthService.getUserId();
         if (!userId) throw new Error('No se pudo obtener el ID de usuario');
         
-        const response = await ApiClient.request(`${API_CONFIG.ENDPOINTS.DOCTORS}`);
+        // Usar el endpoint específico con usuario
+        const headers = await AuthService.getAuthHeaders();
+        const endpoint = `${API_CONFIG.BASE_URL}/doctors/user/${userId}`;
+        console.log(`[Doctor] Solicitando datos a: ${endpoint}`);
         
-        // Si obtenemos un array, buscar el doctor con el mismo id_us
-        if (Array.isArray(response) && response.length > 0) {
-          const myDoctor = response.find(doc => doc.id_us === userId);
-          if (myDoctor) {
-            console.log('Doctor encontrado en la lista por id_us:', JSON.stringify(myDoctor));
-            return myDoctor as Doctor;
+        const response = await fetch(endpoint, { headers });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data) {
+            console.log('[Doctor] Doctor encontrado con endpoint específico:', JSON.stringify(data));
+            return data;
           }
         }
       } catch (fallbackError) {
-        console.error('Error en intento alternativo:', fallbackError);
+        console.error('[Doctor] Error en intento alternativo:', fallbackError);
       }
       
-      // Si llegamos aquí, no pudimos obtener los datos del doctor
-      throw new Error('No se pudo obtener el perfil del doctor después de múltiples intentos');
+      // Si llega aquí, no fue posible obtener los datos del doctor
+      throw new Error('No se pudo obtener el perfil del doctor');
     }
   },
   
@@ -202,110 +217,86 @@ export const DoctorService = {
     try {
       console.log(`[Doctor] Obteniendo pacientes asignados al doctor ID: ${doctorId}`);
       
-      // 1. Construir el endpoint correcto
-      const appointmentsEndpoint = `/appointments/doctor/${doctorId}`;
-      const fullEndpoint = `${API_CONFIG.BASE_URL}${appointmentsEndpoint}`;
-      console.log(`[API] Obteniendo citas desde: ${fullEndpoint}`);
+      // 1. Primero intentar obtener las citas del doctor directamente
+      const appointmentsEndpoint = `${API_CONFIG.BASE_URL}/appointments/doctor/${doctorId}`;
+      console.log(`[API] Obteniendo citas desde: ${appointmentsEndpoint}`);
       
-      const headers = await this.getAuthHeaders();
-      const appointmentsResponse = await fetch(fullEndpoint, { 
-        headers 
-      });
-      
-      if (!appointmentsResponse.ok) {
-        console.error(`[Doctor] Error HTTP: ${appointmentsResponse.status}, ${await appointmentsResponse.text()}`);
-        throw new Error(`Error obteniendo citas del doctor: ${appointmentsResponse.status}`);
-      }
-      
-      const appointments = await appointmentsResponse.json();
-      console.log(`[Doctor] Se encontraron ${appointments.length} citas. Primera cita:`, JSON.stringify(appointments[0] || {}));
-      
-      if (!appointments || appointments.length === 0) {
-        return {
-          success: true,
-          patients: []
-        };
-      }
-      
-      // 2. Extraer IDs únicos de pacientes de esas citas
-      // La estructura es diferente: cada objeto tiene appointment y patient anidados
-      const patientIds = Array.from(new Set(appointments.map((a: any) => {
-        // Extraer ID del paciente de la estructura anidada
-        if (a.appointment && a.appointment.id_pc) {
-          return a.appointment.id_pc;
-        }
-        // Alternativa: usar el ID del objeto patient si existe
-        if (a.patient && a.patient.id) {
-          return a.patient.id;
-        }
-        if (a.id_pc) {
-          return a.id_pc;
-        }
-        return null;
-      }).filter(id => id !== null)));
-      
-      console.log(`[Doctor] IDs únicos de pacientes: ${patientIds.join(', ')}`);
-      
-      if (patientIds.length === 0) {
-        console.log('[Doctor] No se encontraron IDs de pacientes en las citas');
-        return {
-          success: true,
-          patients: []
-        };
-      }
-      
-      // 3. Obtener detalles de cada paciente
-      const patientsPromises = patientIds.map(async (patientId: number) => {
-        const patientEndpoint = `/patients/${patientId}`;
-        const fullPatientEndpoint = `${API_CONFIG.BASE_URL}${patientEndpoint}`;
-        console.log(`[API] Obteniendo paciente desde: ${fullPatientEndpoint}`);
-        
-        try {
-          const patientResponse = await fetch(fullPatientEndpoint, { 
-            headers 
-          });
-          
-          if (!patientResponse.ok) {
-            console.warn(`[Doctor] No se pudo obtener el paciente ID: ${patientId} - Status: ${patientResponse.status}`);
-            return null;
-          }
-          
-          const patientData = await patientResponse.json();
-          console.log(`[Doctor] Datos del paciente ${patientId}:`, JSON.stringify(patientData).substring(0, 200) + "...");
-          
-          // Asegurarse de que el objeto tenga la estructura esperada
-          // Si la API devuelve el id como 'id' pero nuestro código espera 'id_pc'
-          if (patientData && patientData.id && !patientData.id_pc) {
-            patientData.id_pc = patientData.id;  // Añadir campo id_pc si no existe
-          }
-          
-          return patientData;
-        } catch (error) {
-          console.error(`[Doctor] Error al obtener paciente ID ${patientId}:`, error);
-          return null;
-        }
-      });
+      const headers = await AuthService.getAuthHeaders();
       
       try {
-        const patientsResults = await Promise.all(patientsPromises);
-        const patients = patientsResults.filter(p => p !== null);
+        const appointmentsResponse = await fetch(appointmentsEndpoint, { headers });
         
-        console.log(`[Doctor] Se encontraron ${patients.length} pacientes con datos válidos`);
-        
-        return {
-          success: true,
-          patients
-        };
+        if (appointmentsResponse.ok) {
+          const appointments = await appointmentsResponse.json();
+          console.log(`[Doctor] Se encontraron ${appointments.length} citas`);
+          
+          if (appointments && appointments.length > 0) {
+            // Extraer IDs únicos de pacientes
+            const patientIds = Array.from(new Set(appointments.map((a: any) => {
+              // Extraer ID del paciente según la estructura
+              if (a.appointment && a.appointment.id_pc) {
+                return a.appointment.id_pc;
+              }
+              if (a.patient && a.patient.id) {
+                return a.patient.id;
+              }
+              if (a.id_pc) {
+                return a.id_pc;
+              }
+              return null;
+            }).filter(id => id !== null)));
+            
+            console.log(`[Doctor] IDs únicos de pacientes encontrados: ${patientIds.join(', ')}`);
+            
+            // Obtener detalles de los pacientes
+            const patients = await this.getPatientsByIds(patientIds, headers);
+            
+            return {
+              success: true,
+              patients
+            };
+          }
+        } else {
+          console.warn(`[Doctor] Error obteniendo citas: ${appointmentsResponse.status}`);
+        }
       } catch (error) {
-        console.error('[Doctor] Error procesando pacientes:', error);
-        return {
-          success: false,
-          patients: [],
-          error: error.message
-        };
+        console.error('[Doctor] Error en la obtención de citas:', error);
       }
+      
+      // 2. Si el primer método falla, intentar obtener todos los pacientes y filtrar
+      console.log('[Doctor] Intentando método alternativo: obtener todos los pacientes');
+      
+      try {
+        const patientsEndpoint = `${API_CONFIG.BASE_URL}/patients`;
+        console.log(`[API] Obteniendo todos los pacientes desde: ${patientsEndpoint}`);
+        
+        const patientsResponse = await fetch(patientsEndpoint, { headers });
+        
+        if (patientsResponse.ok) {
+          const allPatients = await patientsResponse.json();
+          console.log(`[Doctor] Se encontraron ${allPatients.length} pacientes en total`);
+          
+          // Como no podemos filtrar por doctor, devolvemos todos para desarrollo
+          return {
+            success: true,
+            patients: allPatients
+          };
+        } else {
+          console.warn(`[Doctor] Error obteniendo pacientes: ${patientsResponse.status}`);
+        }
+      } catch (error) {
+        console.error('[Doctor] Error en la obtención de pacientes:', error);
+      }
+      
+      // Si no hay pacientes, devolver una lista vacía
+      console.warn('[Doctor] No se encontraron pacientes para este doctor');
+      return {
+        success: false,
+        patients: [],
+        error: 'No se encontraron pacientes para este doctor'
+      };
     } catch (error) {
-      console.error('[Doctor] Error obteniendo pacientes:', error);
+      console.error('[Doctor] Error general en getDoctorPatients:', error);
       return {
         success: false,
         patients: [],
@@ -313,7 +304,47 @@ export const DoctorService = {
       };
     }
   },
-
+  
+  /**
+   * Método auxiliar para obtener pacientes por sus IDs
+   */
+  async getPatientsByIds(patientIds: number[], headers: any): Promise<any[]> {
+    const patients = [];
+    
+    // Si no se proporcionan headers, obtenerlos
+    if (!headers) {
+      headers = await AuthService.getAuthHeaders();
+    }
+    
+    for (const patientId of patientIds) {
+      try {
+        const patientEndpoint = `${API_CONFIG.BASE_URL}/patients/${patientId}`;
+        console.log(`[API] Obteniendo paciente desde: ${patientEndpoint}`);
+        
+        const patientResponse = await fetch(patientEndpoint, { headers });
+        
+        if (patientResponse.ok) {
+          const patientData = await patientResponse.json();
+          console.log(`[Doctor] Paciente ${patientId} obtenido correctamente`);
+          
+          // Asegurar que tenga id_pc
+          if (patientData) {
+            if (!patientData.id_pc && patientData.id) {
+              patientData.id_pc = patientData.id;
+            }
+            patients.push(patientData);
+          }
+        } else {
+          console.warn(`[Doctor] No se pudo obtener el paciente ID ${patientId}: ${patientResponse.status}`);
+        }
+      } catch (error) {
+        console.error(`[Doctor] Error al obtener paciente ID ${patientId}:`, error);
+      }
+    }
+    
+    return patients;
+  },
+  
   /**
    * Obtiene la cita más reciente de un paciente específico
    * @param patientId ID del paciente
@@ -323,95 +354,92 @@ export const DoctorService = {
     try {
       console.log(`[Doctor] Obteniendo última cita para paciente ID: ${patientId}`);
       
-      const appointmentsEndpoint = `/appointments/patient/${patientId}`;
-      const fullEndpoint = `${API_CONFIG.BASE_URL}${appointmentsEndpoint}`;
-      console.log(`[API] Obteniendo citas desde: ${fullEndpoint}`);
+      // Usar la URL completa
+      const appointmentsEndpoint = `${API_CONFIG.BASE_URL}/appointments/patient/${patientId}`;
+      console.log(`[API] Obteniendo citas desde: ${appointmentsEndpoint}`);
       
-      const headers = await this.getAuthHeaders();
-      const response = await fetch(fullEndpoint, { 
-        headers 
-      });
+      const headers = await AuthService.getAuthHeaders();
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[Doctor] Error HTTP: ${response.status}, ${errorText}`);
-        throw new Error(`Error obteniendo citas del paciente: ${response.status}`);
-      }
-      
-      const appointments = await response.json();
-      console.log(`[Doctor] Se encontraron ${appointments.length} citas para el paciente`);
-      
-      // Mostrar la primera cita para depuración
-      if (appointments && appointments.length > 0) {
-        console.log(`[Doctor] Ejemplo de primera cita:`, JSON.stringify(appointments[0]).substring(0, 200) + "...");
-      }
-      
-      if (!appointments || appointments.length === 0) {
-        return {
-          success: true,
-          appointment: null
-        };
-      }
-      
-      // Extraer detalles de cita, considerando posible estructura anidada
-      const processedAppointments = appointments.map((app: any) => {
-        // Si la cita está en formato anidado, extraer datos
-        if (app.appointment) {
-          console.log(`[Doctor] Procesando cita con estructura anidada`);
-          return {
-            id_ap: app.appointment.id_ap,
-            id_pc: app.appointment.id_pc,
-            id_dc: app.appointment.id_dc,
-            date: app.appointment.date,
-            time: app.appointment.time,
-            status: app.appointment.status,
-            notes: app.appointment.notes,
-            payment_amount: app.appointment.payment_amount,
-            payment_status: app.appointment.payment_status,
-            // Mantener referencia a estructuras anidadas originales
-            patient: app.patient,
-            doctor: app.doctor
-          };
+      try {
+        const response = await fetch(appointmentsEndpoint, { headers });
+        
+        if (response.ok) {
+          const appointments = await response.json();
+          console.log(`[Doctor] Se encontraron ${appointments.length} citas para el paciente`);
+          
+          // Mostrar la primera cita para depuración
+          if (appointments && appointments.length > 0) {
+            console.log(`[Doctor] Ejemplo de primera cita:`, JSON.stringify(appointments[0]).substring(0, 200) + "...");
+          
+            // Extraer detalles de cita, considerando posible estructura anidada
+            const processedAppointments = appointments.map((app: any) => {
+              // Si la cita está en formato anidado, extraer datos
+              if (app.appointment) {
+                console.log(`[Doctor] Procesando cita con estructura anidada`);
+                return {
+                  id_ap: app.appointment.id_ap,
+                  id_pc: app.appointment.id_pc,
+                  id_dc: app.appointment.id_dc,
+                  date: app.appointment.date,
+                  time: app.appointment.time,
+                  status: app.appointment.status,
+                  notes: app.appointment.notes,
+                  payment_amount: app.appointment.payment_amount,
+                  payment_status: app.appointment.payment_status,
+                  // Mantener referencia a estructuras anidadas originales
+                  patient: app.patient,
+                  doctor: app.doctor
+                };
+              }
+              // Si no está anidada, devolverla tal cual
+              return app;
+            });
+            
+            // Ordenar por fecha (más reciente primero)
+            processedAppointments.sort((a: Appointment, b: Appointment) => {
+              // Primero comparamos por fecha
+              const dateA = new Date(a.date || '2000-01-01');
+              const dateB = new Date(b.date || '2000-01-01');
+              
+              if (dateA > dateB) return -1;
+              if (dateA < dateB) return 1;
+              
+              // Si las fechas son iguales, comparamos por hora
+              const timeA = (a.time || '00:00').split(':');
+              const timeB = (b.time || '00:00').split(':');
+              
+              const hourA = parseInt(timeA[0]);
+              const hourB = parseInt(timeB[0]);
+              
+              if (hourA !== hourB) return hourB - hourA;
+              
+              const minA = parseInt(timeA[1]);
+              const minB = parseInt(timeB[1]);
+              
+              return minB - minA;
+            });
+            
+            const latestAppointment = processedAppointments[0];
+            console.log(`[Doctor] Última cita encontrada con ID: ${latestAppointment.id_ap}`);
+            
+            return {
+              success: true,
+              appointment: latestAppointment
+            };
+          }
+        } else {
+          console.warn(`[Doctor] Error obteniendo citas: ${response.status}`);
         }
-        // Si no está anidada, devolverla tal cual
-        return app;
-      });
-      
-      // Mostrar la primera cita procesada para depuración
-      if (processedAppointments && processedAppointments.length > 0) {
-        console.log(`[Doctor] Ejemplo de primera cita procesada:`, JSON.stringify(processedAppointments[0]).substring(0, 200) + "...");
+      } catch (error) {
+        console.error('[Doctor] Error en la obtención de citas del paciente:', error);
       }
       
-      // Ordenar por fecha (más reciente primero)
-      processedAppointments.sort((a: Appointment, b: Appointment) => {
-        // Primero comparamos por fecha
-        const dateA = new Date(a.date);
-        const dateB = new Date(b.date);
-        
-        if (dateA > dateB) return -1;
-        if (dateA < dateB) return 1;
-        
-        // Si las fechas son iguales, comparamos por hora
-        const timeA = a.time.split(':');
-        const timeB = b.time.split(':');
-        
-        const hourA = parseInt(timeA[0]);
-        const hourB = parseInt(timeB[0]);
-        
-        if (hourA !== hourB) return hourB - hourA;
-        
-        const minA = parseInt(timeA[1]);
-        const minB = parseInt(timeB[1]);
-        
-        return minB - minA;
-      });
-      
-      const latestAppointment = processedAppointments[0];
-      console.log(`[Doctor] Última cita encontrada con ID: ${latestAppointment.id_ap}`);
-      
+      // Si no se encontraron citas, devolver null
+      console.warn('[Doctor] No se encontraron citas para este paciente');
       return {
-        success: true,
-        appointment: latestAppointment
+        success: false,
+        appointment: null,
+        error: 'No se encontraron citas para este paciente'
       };
     } catch (error) {
       console.error('[Doctor] Error obteniendo última cita:', error);
@@ -422,4 +450,4 @@ export const DoctorService = {
       };
     }
   }
-}; 
+};

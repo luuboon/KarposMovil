@@ -43,8 +43,21 @@ export default function DispositivosScreen() {
       await loadPatients(profile.id_dc);
     } catch (error) {
       console.error('[Dispositivos] Error al cargar datos del doctor:', error);
-      Alert.alert('Error', 'No se pudieron cargar los datos del doctor.');
       setLoading(false);
+      
+      // Mostrar mensaje específico según el tipo de error
+      let errorMessage = 'No se pudieron cargar los datos del doctor.';
+      
+      if (error instanceof Error) {
+        // Personalizar mensaje según el texto del error
+        if (error.message.includes('No se encontró un doctor')) {
+          errorMessage = 'No se encontró un doctor asociado a tu cuenta. Por favor, contacta al administrador para verificar tus permisos.';
+        } else if (error.message.includes('No se pudo obtener el perfil')) {
+          errorMessage = 'No se pudo obtener tu perfil de doctor. Verifica tu conexión e inténtalo de nuevo.';
+        }
+      }
+      
+      Alert.alert('Error', errorMessage);
     }
   };
 
@@ -111,11 +124,21 @@ export default function DispositivosScreen() {
         }
       } else {
         console.log('[Dispositivos] No se encontraron pacientes');
-        Alert.alert('Sin pacientes', 'No tienes pacientes asignados. Por favor, verifica con el administrador.');
+        setPatients([]);
+        setSelectedPatient(null);
+        Alert.alert(
+          'Sin pacientes', 
+          result.error || 'No tienes pacientes asignados. Consulta con el administrador para verificar tus asignaciones.'
+        );
       }
     } catch (error) {
       console.error('[Dispositivos] Error cargando pacientes:', error);
-      Alert.alert('Error', 'No se pudieron cargar los pacientes. Comprueba tu conexión.');
+      setPatients([]);
+      setSelectedPatient(null);
+      Alert.alert(
+        'Error', 
+        'No se pudieron cargar los pacientes. Verifica tu conexión a internet e inténtalo de nuevo.'
+      );
     } finally {
       setLoading(false);
     }
@@ -145,11 +168,15 @@ export default function DispositivosScreen() {
         setLatestAppointment(normalized);
       } else {
         setLatestAppointment(null);
-        Alert.alert('Sin citas', 'Este paciente no tiene citas programadas.');
+        console.log(`[Dispositivos] No se encontró cita para el paciente: ${result.error || 'Sin citas'}`);
+        // No mostramos alerta aquí para no interrumpir al usuario,
+        // la interfaz mostrará el mensaje correspondiente
       }
     } catch (error) {
       console.error('[Dispositivos] Error cargando última cita:', error);
       setLatestAppointment(null);
+      // No mostramos alerta aquí para no interrumpir al usuario,
+      // la interfaz mostrará un mensaje adecuado
     }
   };
 
