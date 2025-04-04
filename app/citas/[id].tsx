@@ -46,15 +46,28 @@ export default function DetallesCitaScreen() {
       console.log(`Cargando detalles de cita ID: ${citaId}`);
       
       const citaData = await AppointmentService.getAppointmentById(citaId);
+      console.log('Datos de cita cargados:', JSON.stringify(citaData));
       
       if (citaData) {
-        setCita(citaData);
+        // Procesar la respuesta para asegurar la estructura esperada
+        const processedData = procesarDatosCita(citaData);
+        setCita(processedData);
         
         // Si el usuario es doctor, cargar datos del paciente
         const role = await getUserRole();
-        if (role === 'doctor' && citaData.id_pc) {
+        if (role === 'doctor' && processedData.id_pc) {
           try {
-            const pacienteData = await PatientService.getPatientById(citaData.id_pc);
+            let pacienteData = null;
+            
+            // Si ya tenemos los datos del paciente en la respuesta, usarlos
+            if (processedData.patient) {
+              pacienteData = processedData.patient;
+            } else {
+              // Si no, cargarlos desde la API
+              pacienteData = await PatientService.getPatientById(processedData.id_pc);
+            }
+            
+            console.log('Datos del paciente:', JSON.stringify(pacienteData));
             setPaciente(pacienteData);
             
             // Cargar dispositivos IoT asociados al paciente
@@ -81,6 +94,19 @@ export default function DetallesCitaScreen() {
       setLoading(false);
     }
   }, [id]);
+
+  // Procesar datos de la cita para manejar diferentes formatos de respuesta
+  const procesarDatosCita = (data) => {
+    // Si los datos vienen dentro de la propiedad 'appointment', extraerlos
+    if (data.appointment) {
+      return {
+        ...data.appointment,
+        patient: data.patient
+      };
+    }
+    // De lo contrario, devolver los datos como están
+    return data;
+  };
 
   useEffect(() => {
     loadCitaData();

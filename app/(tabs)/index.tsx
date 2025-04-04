@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, RefreshControl, ScrollView, TouchableOpacity } from 'react-native';
-import { Text, Surface, ActivityIndicator, Button, Card, Divider } from 'react-native-paper';
+import { View, StyleSheet, RefreshControl, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { Text, Surface, ActivityIndicator, Button, Card, Divider, Chip } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../components/AuthContext';
 import ProgressCircle from '../components/ProgressCircle';
@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 
 export default function HomeScreen() {
-  const { userRole, userEmail, userId } = useAuth();
+  const { userRole, userEmail, userId, logout } = useAuth();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +21,7 @@ export default function HomeScreen() {
   const [nextAppointment, setNextAppointment] = useState<Appointment | null>(null);
   const [doctorProfile, setDoctorProfile] = useState<Doctor | null>(null);
   const [upcomingAppointments, setUpcomingAppointments] = useState<Appointment[]>([]);
+  const [showAllAppointments, setShowAllAppointments] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -83,8 +84,12 @@ export default function HomeScreen() {
             const appointments = await DoctorService.getUpcomingAppointments();
             console.log('Citas del doctor cargadas exitosamente:', JSON.stringify(appointments));
             
-            // Limitar a 3 citas
-            setUpcomingAppointments(appointments.slice(0, 3));
+            // Filtrar solo citas aceptadas (estado 'completed')
+            const completedAppointments = appointments.filter(app => 
+              app.status?.toLowerCase() === 'completed'
+            );
+            
+            setUpcomingAppointments(completedAppointments);
           } catch (appointmentsError) {
             console.error('Error al cargar citas del doctor:', appointmentsError);
             setError('No se pudieron cargar las citas. Por favor, intenta de nuevo.');
@@ -108,6 +113,16 @@ export default function HomeScreen() {
     loadData();
   };
 
+  // Función para navegar a los detalles de una cita
+  const navigateToCitaDetails = (appointmentId: number | undefined) => {
+    if (appointmentId) {
+      console.log(`Navegando a detalles de cita con ID: ${appointmentId}`);
+      router.push(`/citas/${appointmentId}`);
+    } else {
+      console.error('No se puede navegar, el ID de la cita es indefinido');
+    }
+  };
+
   const formatAppointmentDate = (appointment: Appointment) => {
     try {
       const date = new Date(`${appointment.date}T${appointment.time}`);
@@ -115,6 +130,70 @@ export default function HomeScreen() {
     } catch (error) {
       console.error('Error al formatear fecha:', error);
       return 'Fecha no disponible';
+    }
+  };
+
+  // Función para manejar el cambio de estado de una cita
+  const handleChangeAppointmentStatus = async (appointment: Appointment) => {
+    if (!appointment.id_ap) return;
+    
+    try {
+      setLoading(true);
+      
+      // Si ya está agendada, preguntar si desea marcarla como completada
+      if (appointment.status?.toLowerCase() === 'scheduled') {
+        Alert.alert(
+          'Completar cita',
+          '¿Desea marcar esta cita como completada?',
+          [
+            {
+              text: 'Cancelar',
+              style: 'cancel',
+              onPress: () => setLoading(false)
+            },
+            {
+              text: 'Completar',
+              onPress: async () => {
+                try {
+                  await AppointmentService.updateAppointmentStatus(appointment.id_ap!, 'completed');
+                  Alert.alert('Éxito', 'La cita ha sido marcada como completada.');
+                  loadData(); // Recargar datos
+                } catch (error) {
+                  console.error('Error al actualizar estado de cita:', error);
+                  Alert.alert('Error', 'No se pudo actualizar el estado de la cita. Intente de nuevo.');
+                  setLoading(false);
+                }
+              }
+            }
+          ]
+        );
+      } 
+      // Si está pendiente, agendar
+      else if (appointment.status?.toLowerCase() === 'pending') {
+        try {
+          await AppointmentService.updateAppointmentStatus(appointment.id_ap, 'scheduled');
+          Alert.alert('Éxito', 'La cita ha sido agendada exitosamente.');
+          loadData(); // Recargar datos
+        } catch (error) {
+          console.error('Error al agendar cita:', error);
+          Alert.alert('Error', 'No se pudo agendar la cita. Intente de nuevo.');
+          setLoading(false);
+        }
+      }
+    } catch (error) {
+      console.error('Error al procesar la solicitud:', error);
+      setLoading(false);
+    }
+  };
+
+  // Función para manejar el cierre de sesión
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.replace('/auth/login'); // Redireccionar a la pantalla de inicio de sesión
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error);
+      Alert.alert('Error', 'No se pudo cerrar la sesión. Intente nuevamente.');
     }
   };
 
@@ -216,6 +295,18 @@ export default function HomeScreen() {
       ? `Dr. ${doctorProfile.nombre} ${doctorProfile.apellido_p}` 
       : 'Doctor';
 
+    // Ordenar citas por fecha y hora (las más próximas primero)
+    const sortedAppointments = [...upcomingAppointments].sort((a, b) => {
+      const dateA = new Date(`${a.date}T${a.time}`);
+      const dateB = new Date(`${b.date}T${b.time}`);
+      return dateA.getTime() - dateB.getTime();
+    });
+    
+    // Si no se está mostrando todo, limitamos a las 3 primeras citas
+    const displayedAppointments = !showAllAppointments 
+      ? sortedAppointments.slice(0, 3) 
+      : sortedAppointments;
+
     return (
       <>
         <Text style={styles.welcomeDoctor}>
@@ -224,45 +315,134 @@ export default function HomeScreen() {
 
         <View style={styles.content}>
           <Surface style={styles.doctorAppointmentsContainer} elevation={2}>
-            <Text style={styles.doctorAppointmentsTitle}>
-              Tus próximas citas son (max 3):
-            </Text>
+            <View style={styles.appointmentsHeader}>
+              <Text style={styles.doctorAppointmentsTitle}>
+                {!showAllAppointments ? 'Tus próximas citas aceptadas' : 'Todas tus citas aceptadas'}
+              </Text>
+              <TouchableOpacity
+                style={styles.toggleButton}
+                onPress={() => setShowAllAppointments(!showAllAppointments)}
+              >
+                <Text style={styles.toggleButtonText}>
+                  {!showAllAppointments ? 'Ver todas' : 'Ver menos'}
+                </Text>
+              </TouchableOpacity>
+            </View>
             
-            {upcomingAppointments.length === 0 ? (
-              <Text style={styles.noCitasText}>No tienes citas programadas</Text>
+            {displayedAppointments.length === 0 ? (
+              <View style={styles.noCitasContainer}>
+                <Text style={styles.noCitasText}>No tienes citas agendadas</Text>
+                <Button 
+                  mode="outlined" 
+                  onPress={loadData}
+                  style={styles.refreshButton}
+                >
+                  Actualizar
+                </Button>
+              </View>
             ) : (
-              upcomingAppointments.map((appointment, index) => (
-                <Card key={appointment.id_ap} style={styles.citaCard}>
-                  <Card.Content style={styles.citaCardContent}>
-                    <View style={styles.citaInfo}>
-                      <Text style={styles.citaFecha}>
-                        {formatAppointmentDate(appointment)}
-                      </Text>
-                      <Text style={styles.citaPaciente}>
-                        {/* Mostrar información del paciente si está disponible */}
-                        {(appointment as any).patient 
-                          ? `${(appointment as any).patient.nombre || ''} ${(appointment as any).patient.apellido_p || ''}`.trim()
-                          : `Paciente ID: ${appointment.id_pc}`}
-                      </Text>
+              displayedAppointments.map((appointment) => (
+                <Card 
+                  key={appointment.id_ap} 
+                  style={styles.citaCard}
+                  onPress={() => navigateToCitaDetails(appointment.id_ap)}
+                >
+                  <Card.Content>
+                    <View style={styles.citaCardContent}>
+                      <View style={styles.citaInfo}>
+                        <Text style={styles.citaFecha}>
+                          {formatAppointmentDate(appointment)}
+                        </Text>
+                        <Text style={styles.citaPaciente}>
+                          {/* Mostrar información del paciente si está disponible */}
+                          {(appointment.patient) 
+                            ? `${appointment.patient.nombre || ''} ${appointment.patient.apellido_p || ''}`.trim()
+                            : appointment.id_pc 
+                              ? `Paciente ID: ${appointment.id_pc}` 
+                              : 'Paciente no especificado'}
+                        </Text>
+                      </View>
+                      <View style={styles.statusContainer}>
+                        <Chip 
+                          style={[styles.statusChip, { backgroundColor: getStatusColor(appointment.status) }]}
+                        >
+                          <Text style={styles.statusText}>
+                            {getStatusText(appointment.status)}
+                          </Text>
+                        </Chip>
+                        
+                        <TouchableOpacity 
+                          style={styles.verDetallesButton}
+                          onPress={() => navigateToCitaDetails(appointment.id_ap)}
+                        >
+                          <Text style={styles.verDetallesButtonText}>Ver detalles</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                    <TouchableOpacity 
-                      style={styles.editButton}
-                      onPress={() => router.navigate('/citas')}
-                    >
-                      <Text style={styles.editButtonText}>Editar</Text>
-                    </TouchableOpacity>
                   </Card.Content>
                 </Card>
               ))
             )}
+            
+            <TouchableOpacity 
+              style={styles.verTodasCitasButton}
+              onPress={() => router.push('/citas-dashboard')}
+            >
+              <Ionicons name="calendar-outline" size={20} color="white" />
+              <Text style={styles.verTodasCitasButtonText}>Ir a gestión de citas</Text>
+            </TouchableOpacity>
           </Surface>
         </View>
       </>
     );
   };
 
+  // Función para obtener el color según el estado de la cita
+  const getStatusColor = (status: string | undefined): string => {
+    if (!status) return '#999';
+    
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return '#28a745';
+      case 'pending':
+        return '#ffc107';
+      case 'scheduled':
+        return '#17a2b8';
+      case 'cancelled':
+        return '#dc3545';
+      default:
+        return '#999';
+    }
+  };
+  
+  // Función para obtener el texto del estado de la cita
+  const getStatusText = (status: string | undefined): string => {
+    if (!status) return 'No definido';
+    
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return 'Completada';
+      case 'pending':
+        return 'Pendiente';
+      case 'scheduled':
+        return 'Programada';
+      case 'cancelled':
+        return 'Cancelada';
+      default:
+        return 'No definido';
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
+      {/* Botón de cierre de sesión */}
+      <TouchableOpacity 
+        style={styles.logoutButton}
+        onPress={handleLogout}
+      >
+        <Ionicons name="log-out-outline" size={24} color="#2E7D32" />
+      </TouchableOpacity>
+      
       <ScrollView 
         contentContainerStyle={styles.scrollContent}
         refreshControl={
@@ -386,18 +566,41 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: 'white',
   },
+  appointmentsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   doctorAppointmentsTitle: {
     fontSize: 18,
     color: '#2E7D32',
-    marginBottom: 16,
+  },
+  toggleButton: {
+    backgroundColor: '#2E7D32',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  toggleButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  noCitasContainer: {
+    alignItems: 'center',
+    marginVertical: 20,
   },
   noCitasText: {
     fontSize: 16,
     color: '#666',
     fontStyle: 'italic',
     textAlign: 'center',
-    marginTop: 20,
-    marginBottom: 20,
+    marginBottom: 16,
+  },
+  refreshButton: {
+    borderColor: '#2E7D32',
+    borderWidth: 1,
   },
   citaCard: {
     marginBottom: 12,
@@ -423,14 +626,62 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 4,
   },
-  editButton: {
-    backgroundColor: '#FF9F1C',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
+  statusContainer: {
+    marginLeft: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
-  editButtonText: {
+  statusChip: {
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  statusText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  verDetallesButton: {
+    backgroundColor: '#FF9F1C',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginTop: 8,
+  },
+  verDetallesButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  verTodasCitasButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2E7D32',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 16,
+  },
+  verTodasCitasButtonText: {
     color: 'white',
     fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  
+  // Estilo para el botón de cierre de sesión
+  logoutButton: {
+    position: 'absolute',
+    top: 10,
+    right: 15,
+    zIndex: 10,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 3,
   },
 });

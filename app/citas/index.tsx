@@ -1,19 +1,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { Chip } from '@rneui/themed';
-import AppointmentService from '../../lib/services/appointments';
+import { Chip, Button } from '@rneui/themed';
+import { AppointmentService, Appointment } from '../../lib/services/appointments';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Colors from '../../constants/Colors';
 
 export default function CitasScreen() {
-  const [appointments, setAppointments] = useState([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
-  const [userRole, setUserRole] = useState(null);
+  const [error, setError] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
   const router = useRouter();
 
   const getUserRole = async () => {
@@ -28,13 +28,13 @@ export default function CitasScreen() {
   };
 
   const loadCitas = useCallback(async () => {
-    try {
+    try { 
       setError(null);
       
       // Determinar el rol del usuario
       const role = await getUserRole();
       
-      let citasData = [];
+      let citasData: Appointment[] = [];
       
       // Cargar citas según el rol
       if (role === 'doctor') {
@@ -65,11 +65,51 @@ export default function CitasScreen() {
     loadCitas();
   }, [loadCitas]);
 
-  const navigateToCitaDetails = (id) => {
-    router.push(`/citas/${id}`);
+  // Función para actualizar el estado de una cita
+  const handleUpdateAppointmentStatus = async (appointmentId: number, newStatus: string) => {
+    try {
+      setLoading(true);
+      
+      await AppointmentService.updateAppointmentStatus(appointmentId, newStatus);
+      
+      // Mostrar mensaje de éxito
+      const message = newStatus === 'scheduled' 
+        ? 'La cita ha sido agendada exitosamente.'
+        : 'La cita ha sido marcada como completada.';
+      
+      Alert.alert('Éxito', message);
+      
+      // Recargar las citas
+      loadCitas();
+    } catch (error) {
+      console.error(`Error al cambiar estado de cita a ${newStatus}:`, error);
+      Alert.alert('Error', `No se pudo cambiar el estado de la cita a ${newStatus === 'scheduled' ? 'agendada' : 'completada'}.`);
+      setLoading(false);
+    }
   };
 
-  const getStatusChip = (status) => {
+  // Función para confirmar cambio de estado a completada
+  const confirmCompleteAppointment = (appointmentId: number) => {
+    Alert.alert(
+      'Completar Cita',
+      '¿Está seguro que desea marcar esta cita como completada?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Completar',
+          onPress: () => handleUpdateAppointmentStatus(appointmentId, 'completed') 
+        }
+      ]
+    );
+  };
+
+  const navigateToCitaDetails = (id: number | undefined) => {
+    if (id) {
+      router.push(`/citas/${id}`);
+    }
+  };
+
+  const getStatusChip = (status: string | undefined) => {
     let color = Colors.light.tint;
     let label = 'Pendiente';
 
@@ -101,7 +141,7 @@ export default function CitasScreen() {
     );
   };
 
-  const formatDate = (dateString) => {
+  const formatDate = (dateString: string | undefined) => {
     try {
       if (!dateString) return 'Fecha no disponible';
       
@@ -116,32 +156,66 @@ export default function CitasScreen() {
     }
   };
 
-  const renderAppointmentItem = ({ item }) => (
-    <TouchableOpacity 
-      style={styles.appointmentCard}
-      onPress={() => navigateToCitaDetails(item.id_ap)}
-    >
-      <View style={styles.appointmentHeader}>
+  const renderAppointmentItem = ({ item }: { item: Appointment }) => (
+    <View style={styles.appointmentCard}>
+      <TouchableOpacity 
+        style={styles.appointmentHeader}
+        onPress={() => navigateToCitaDetails(item.id_ap)}
+      >
         <Text style={styles.dateText}>{formatDate(item.date)}</Text>
         {getStatusChip(item.status)}
-      </View>
+      </TouchableOpacity>
       
       <View style={styles.appointmentDetails}>
         <Text style={styles.timeText}>Hora: {item.time}</Text>
         
-        {userRole === 'doctor' && item.patient && (
+        {userRole === 'doctor' && (
           <Text style={styles.patientText}>
-            Paciente: {item.patient.name || 'No disponible'}
+            Paciente: {item.patient 
+              ? `${item.patient.nombre || ''} ${item.patient.apellido_p || ''}`.trim() 
+              : 'No disponible'}
           </Text>
         )}
         
         {userRole === 'patient' && item.doctor && (
           <Text style={styles.doctorText}>
-            Doctor: {item.doctor.name || 'No disponible'}
+            Doctor: {item.doctor.nombre 
+              ? `${item.doctor.nombre || ''} ${item.doctor.apellido_p || ''}`.trim() 
+              : 'No disponible'}
           </Text>
         )}
+        
+        {/* Botones de acción para doctor */}
+        {userRole === 'doctor' && (
+          <View style={styles.actionButtonsContainer}>
+            <TouchableOpacity 
+              style={styles.detailsButton}
+              onPress={() => navigateToCitaDetails(item.id_ap)}
+            >
+              <Text style={styles.detailsButtonText}>Ver detalles</Text>
+            </TouchableOpacity>
+            
+            {item.status?.toLowerCase() === 'pending' && (
+              <TouchableOpacity 
+                style={styles.scheduleButton}
+                onPress={() => item.id_ap && handleUpdateAppointmentStatus(item.id_ap, 'scheduled')}
+              >
+                <Text style={styles.actionButtonText}>Agendar</Text>
+              </TouchableOpacity>
+            )}
+            
+            {item.status?.toLowerCase() === 'scheduled' && (
+              <TouchableOpacity 
+                style={styles.completeButton}
+                onPress={() => item.id_ap && confirmCompleteAppointment(item.id_ap)}
+              >
+                <Text style={styles.actionButtonText}>Completar</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </View>
-    </TouchableOpacity>
+    </View>
   );
 
   if (loading) {
@@ -179,13 +253,22 @@ export default function CitasScreen() {
     <View style={styles.container}>
       <FlatList
         data={appointments}
-        keyExtractor={(item) => item.id_ap.toString()}
+        keyExtractor={(item) => item.id_ap?.toString() || Math.random().toString()}
         renderItem={renderAppointmentItem}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       />
+      
+      {userRole === 'doctor' && (
+        <TouchableOpacity 
+          style={styles.floatingButton}
+          onPress={() => router.push('/citas/agendar')}
+        >
+          <Text style={styles.floatingButtonText}>+ Nueva Cita</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -275,4 +358,57 @@ const styles = StyleSheet.create({
     color: '#777',
     textAlign: 'center',
   },
+  actionButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 12,
+    gap: 8,
+  },
+  detailsButton: {
+    backgroundColor: '#6c757d',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  scheduleButton: {
+    backgroundColor: '#17a2b8',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  completeButton: {
+    backgroundColor: '#28a745',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  actionButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  detailsButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  floatingButton: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: '#2E7D32',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 30,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+  },
+  floatingButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+  }
 });

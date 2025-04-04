@@ -20,7 +20,7 @@ export const ApiClient = {
    * @param options Opciones adicionales para fetch
    * @returns Promesa con la respuesta en formato JSON
    */
-  async request(endpoint: string, options: RequestInit = {}) {
+  async request(endpoint: string, options: RequestInit & { ignoreErrors?: boolean } = {}) {
     try {
       // Obtener token de autenticación
       const accessToken = await SecureStore.getItemAsync('accessToken');
@@ -58,9 +58,29 @@ export const ApiClient = {
       
       clearTimeout(timeoutId);
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[API] Error en la respuesta (${response.status}):`, errorText);
+      // Extraer el cuerpo de la respuesta antes de verificar si fue exitosa
+      let responseData: any;
+      
+      // Intentar obtener el contenido como JSON primero
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          responseData = await response.json();
+        } catch (e) {
+          responseData = await response.text();
+        }
+      } else {
+        // Si no es JSON, intentar como texto
+        const text = await response.text();
+        try {
+          responseData = JSON.parse(text);
+        } catch (e) {
+          responseData = text;
+        }
+      }
+      
+      if (!response.ok && !options.ignoreErrors) {
+        console.error(`[API] Error en la respuesta (${response.status}):`, typeof responseData === 'string' ? responseData : JSON.stringify(responseData));
         
         // Si es un error 401, intentar refrescar el token automáticamente
         if (response.status === 401 && !options.headers?.['refresh-attempt']) {
@@ -84,34 +104,14 @@ export const ApiClient = {
         
         throw {
           status: response.status,
-          message: errorText,
+          message: typeof responseData === 'string' ? responseData : JSON.stringify(responseData),
+          data: responseData,
           endpoint
         };
       }
       
-      try {
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          const jsonResponse = await response.json();
-          console.log(`[API] Respuesta JSON exitosa de ${endpoint}`);
-          return jsonResponse;
-        } else {
-          const text = await response.text();
-          try {
-            // Intentar parsear como JSON incluso si el Content-Type no es correcto
-            const jsonData = JSON.parse(text);
-            console.log(`[API] Respuesta parseada como JSON (aunque no tenía el Content-Type correcto) de ${endpoint}`);
-            return jsonData;
-          } catch (e) {
-            // Si no es JSON, retornar el texto
-            console.log(`[API] Respuesta de texto exitosa de ${endpoint}`);
-            return text;
-          }
-        }
-      } catch (error) {
-        console.error('[API] Error al procesar la respuesta:', error);
-        throw error;
-      }
+      console.log(`[API] Respuesta exitosa de ${endpoint}`);
+      return responseData;
     } catch (error) {
       console.error('[API] Error detallado en la petición:', JSON.stringify({
         endpoint,

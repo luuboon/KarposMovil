@@ -181,14 +181,27 @@ export const DoctorService = {
       console.log(`Respuesta de citas: ${JSON.stringify(appointments)}`);
       
       if (Array.isArray(appointments) && appointments.length > 0) {
-        // Filtrar solo citas futuras
+        // Extraer datos de citas si están dentro de un objeto "appointment"
+        const processedAppointments = appointments.map(item => {
+          if (item.appointment) {
+            return {
+              ...item.appointment,
+              patient: item.patient // mantener la referencia al paciente
+            };
+          }
+          return item;
+        });
+        
+        // Filtrar solo citas futuras con estado pendiente o completado
+        // No usamos "scheduled" porque no está permitido en la base de datos
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
-        const filteredAppointments = appointments
+        const filteredAppointments = processedAppointments
           .filter(app => {
             const appDate = new Date(app.date);
-            return appDate >= today && (app.status === 'pending' || app.status === 'scheduled');
+            return appDate >= today && 
+                  (app.status === 'pending' || app.status === 'completed');
           })
           .sort((a, b) => {
             const dateA = new Date(`${a.date}T${a.time}`);
@@ -204,6 +217,41 @@ export const DoctorService = {
       return [];
     } catch (error) {
       console.error('Error al obtener citas del doctor:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Obtiene las próximas citas del doctor sin procesar los datos
+   * @returns Datos de citas en formato bruto (raw) como vienen de la API
+   */
+  async getUpcomingAppointmentsRaw(): Promise<any[]> {
+    try {
+      // Primero obtener el ID del doctor a partir del ID de usuario
+      const doctorProfile = await this.getMyProfile();
+      const doctorId = doctorProfile.id_dc;
+      
+      if (!doctorId) {
+        throw new Error('No se pudo obtener el ID del doctor');
+      }
+      
+      console.log(`Obteniendo citas para doctor ID: ${doctorId}`);
+      
+      // Obtener citas del doctor
+      const endpoint = API_CONFIG.ENDPOINTS.APPOINTMENTS.DOCTOR(doctorId);
+      console.log(`Solicitando citas a: ${endpoint}`);
+      
+      const appointments = await ApiClient.request(endpoint);
+      console.log(`Respuesta de citas: ${JSON.stringify(appointments)}`);
+      
+      if (Array.isArray(appointments)) {
+        return appointments;
+      }
+      
+      console.log('No se encontraron citas para este doctor');
+      return [];
+    } catch (error) {
+      console.error('Error al obtener citas del doctor (raw):', error);
       throw error;
     }
   },

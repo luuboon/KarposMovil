@@ -44,11 +44,26 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <TabBarIcon name="home" color={color} />,
         }}
       />
+      
+      {/* Vista de citas para doctores */}
+      <Tabs.Screen
+        name="citas-dashboard"
+        options={{
+          title: 'Citas',
+          tabBarIcon: ({ color }) => <TabBarIcon name="calendar" color={color} />,
+          // Solo visible para doctores
+          href: userRole === 'doctor' ? undefined : null,
+        }}
+      />
+      
+      {/* Vista de citas para pacientes */}
       <Tabs.Screen
         name="citas/index"
         options={{
           title: 'Citas',
           tabBarIcon: ({ color }) => <TabBarIcon name="calendar" color={color} />,
+          // Solo visible para pacientes
+          href: userRole === 'patient' ? undefined : null,
         }}
       />
       <Tabs.Screen
