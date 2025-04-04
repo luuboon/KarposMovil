@@ -264,14 +264,16 @@ export const DoctorService = {
   async getDoctorPatients(doctorId: number): Promise<DoctorPatientsResult> {
     try {
       console.log(`[Doctor] Obteniendo pacientes asignados al doctor ID: ${doctorId}`);
-      
-      // 1. Primero intentar obtener las citas del doctor directamente
-      const appointmentsEndpoint = `${API_CONFIG.BASE_URL}/appointments/doctor/${doctorId}`;
-      console.log(`[API] Obteniendo citas desde: ${appointmentsEndpoint}`);
-      
       const headers = await AuthService.getAuthHeaders();
       
+      // Intentamos recuperar los pacientes de diversas maneras para asegurar que obtenemos datos
+      const patients = [];
+      
+      // 1. Primero intentar obtener las citas del doctor directamente
       try {
+        const appointmentsEndpoint = `${API_CONFIG.BASE_URL}/appointments/doctor/${doctorId}`;
+        console.log(`[API] Obteniendo citas desde: ${appointmentsEndpoint}`);
+        
         const appointmentsResponse = await fetch(appointmentsEndpoint, { headers });
         
         if (appointmentsResponse.ok) {
@@ -294,15 +296,15 @@ export const DoctorService = {
               return null;
             }).filter(id => id !== null)));
             
-            console.log(`[Doctor] IDs únicos de pacientes encontrados: ${patientIds.join(', ')}`);
+            console.log(`[Doctor] IDs únicos de pacientes encontrados en citas: ${patientIds.join(', ')}`);
             
             // Obtener detalles de los pacientes
-            const patients = await this.getPatientsByIds(patientIds, headers);
+            const patientsFromAppointments = await this.getPatientsByIds(patientIds, headers);
             
-            return {
-              success: true,
-              patients
-            };
+            if (patientsFromAppointments.length > 0) {
+              console.log(`[Doctor] Recuperados ${patientsFromAppointments.length} pacientes desde citas`);
+              patients.push(...patientsFromAppointments);
+            }
           }
         } else {
           console.warn(`[Doctor] Error obteniendo citas: ${appointmentsResponse.status}`);
@@ -311,9 +313,7 @@ export const DoctorService = {
         console.error('[Doctor] Error en la obtención de citas:', error);
       }
       
-      // 2. Si el primer método falla, intentar obtener todos los pacientes y filtrar
-      console.log('[Doctor] Intentando método alternativo: obtener todos los pacientes');
-      
+      // 2. Como método adicional, intentar obtener todos los pacientes directamente
       try {
         const patientsEndpoint = `${API_CONFIG.BASE_URL}/patients`;
         console.log(`[API] Obteniendo todos los pacientes desde: ${patientsEndpoint}`);
@@ -324,16 +324,39 @@ export const DoctorService = {
           const allPatients = await patientsResponse.json();
           console.log(`[Doctor] Se encontraron ${allPatients.length} pacientes en total`);
           
-          // Como no podemos filtrar por doctor, devolvemos todos para desarrollo
-          return {
-            success: true,
-            patients: allPatients
-          };
+          if (allPatients && allPatients.length > 0) {
+            // Añadir pacientes que aún no están en nuestra lista
+            for (const patient of allPatients) {
+              const patientId = patient.id_pc || patient.id;
+              // Verificar si ya tenemos este paciente
+              const existingPatient = patients.find(p => 
+                (p.id_pc === patientId) || (p.id === patientId)
+              );
+              
+              if (!existingPatient) {
+                patients.push(patient);
+              }
+            }
+          }
         } else {
           console.warn(`[Doctor] Error obteniendo pacientes: ${patientsResponse.status}`);
         }
       } catch (error) {
-        console.error('[Doctor] Error en la obtención de pacientes:', error);
+        console.error('[Doctor] Error en la obtención de todos los pacientes:', error);
+      }
+      
+      // Eliminar posibles duplicados
+      const uniquePatients = Array.from(
+        new Map(patients.map(patient => [(patient.id_pc || patient.id), patient])).values()
+      );
+      
+      console.log(`[Doctor] Total de pacientes después de combinar fuentes: ${uniquePatients.length}`);
+      
+      if (uniquePatients.length > 0) {
+        return {
+          success: true,
+          patients: uniquePatients
+        };
       }
       
       // Si no hay pacientes, devolver una lista vacía

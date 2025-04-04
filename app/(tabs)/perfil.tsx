@@ -6,6 +6,7 @@ import { useAuth } from '../../components/AuthContext';
 import { PatientService, Patient } from '../../lib/services/patients';
 import { MedicalRecordService } from '../../lib/services/medicalRecords';
 import { PDFService } from '../../lib/services/pdf';
+import { router } from 'expo-router';
 
 export default function PerfilTab() {
   const { userRole, userEmail, userId, logout } = useAuth();
@@ -170,6 +171,17 @@ export default function PerfilTab() {
     }
   };
   
+  // Función para manejar el cierre de sesión
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.replace('/auth/login'); // Redireccionar a la pantalla de inicio de sesión
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error);
+      Alert.alert('Error', 'No se pudo cerrar la sesión. Intente nuevamente.');
+    }
+  };
+  
   console.log('Renderizando perfil. Estado: loading=', loading, 'error=', error, 'patient=', patient ? 'tiene datos' : 'sin datos');
   
   return (
@@ -281,7 +293,7 @@ export default function PerfilTab() {
             
             <Button 
               mode="contained" 
-              onPress={logout}
+              onPress={handleLogout}
               style={styles.logoutButton}
               buttonColor="#F44336"
               icon="logout"

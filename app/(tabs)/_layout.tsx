@@ -80,7 +80,8 @@ export default function TabLayout() {
             userRole === 'doctor' 
               ? <TabBarIcon name="hardware-chip" color={color} />
               : <TabBarIcon name="phone-portrait" color={color} />,
-          // Siempre visible, pero con diferente nombre según el rol
+          // Solo visible para doctores
+          href: userRole === 'doctor' ? undefined : null,
         }}
       />
       <Tabs.Screen
@@ -88,8 +89,8 @@ export default function TabLayout() {
         options={{
           title: 'Reportes',
           tabBarIcon: ({ color }) => <TabBarIcon name="bar-chart" color={color} />,
-          // Solo visible para pacientes
-          href: userRole === 'doctor' ? null : undefined,
+          // Solo visible para doctores 
+          href: userRole === 'doctor' ? undefined : null,
         }}
       />
       <Tabs.Screen
@@ -97,8 +98,6 @@ export default function TabLayout() {
         options={{
           title: 'Perfil',
           tabBarIcon: ({ color }) => <TabBarIcon name="person" color={color} />,
-          // Solo visible para pacientes
-          href: userRole === 'doctor' ? null : undefined,
         }}
       />
     </Tabs>

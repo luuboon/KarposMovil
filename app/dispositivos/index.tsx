@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
-import { Text, Chip, Card, Title, Paragraph, Button } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, ActivityIndicator, Alert, Modal, TouchableOpacity, Platform } from 'react-native';
+import { Text, Chip, Card, Title, Paragraph, Button, TextInput } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../components/AuthContext';
 import { router } from 'expo-router';
 import IoTSessionControl from '../components/IoTSessionControl';
 import { DoctorService } from '../../lib/services/doctors';
-import { Appointment } from '../../lib/services/appointments';
+import { AppointmentService, Appointment } from '../../lib/services/appointments';
 import { Patient } from '../../lib/services/patients';
 import { Ionicons } from '@expo/vector-icons';
 import { API_CONFIG } from '../../lib/config';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { format } from 'date-fns';
+import { es } from 'date-fns/locale';
 
 export default function DispositivosScreen() {
   const { userRole, userId } = useAuth();
@@ -19,6 +22,14 @@ export default function DispositivosScreen() {
   const [latestAppointment, setLatestAppointment] = useState<Appointment | null>(null);
   const [sessionActive, setSessionActive] = useState(false);
   const [exerciseType, setExerciseType] = useState<'flexion' | 'extension' | 'grip'>('flexion');
+  const [showModal, setShowModal] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [selectedTime, setSelectedTime] = useState(new Date());
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [doctorProfile, setDoctorProfile] = useState<any>(null);
 
   // Cargar pacientes al iniciar
   useEffect(() => {
@@ -38,6 +49,9 @@ export default function DispositivosScreen() {
       // Primero obtener el perfil del doctor para tener su ID correcto (id_dc)
       const profile = await DoctorService.getMyProfile();
       console.log(`[Dispositivos] Perfil del doctor obtenido: id_dc=${profile.id_dc}, id_us=${profile.id_us}`);
+      
+      // Guardar perfil del doctor para usarlo al agendar citas
+      setDoctorProfile(profile);
       
       // Ahora cargar los pacientes usando el id_dc correcto
       await loadPatients(profile.id_dc);
@@ -94,17 +108,51 @@ export default function DispositivosScreen() {
         // Log completo de TODOS los pacientes
         console.log('[Dispositivos] Lista completa de pacientes (raw): ', JSON.stringify(result.patients));
         
-        // Aplanar el array si está anidado
-        let processedPatients = result.patients;
+        // Procesamiento de datos para manejar posibles estructuras anidadas
+        let processedPatients: Patient[] = [];
+        
+        // Si es un array de arrays, aplanarlo
         if (result.patients.length === 1 && Array.isArray(result.patients[0])) {
           console.log('[Dispositivos] Detectado array anidado, aplanando estructura');
           processedPatients = result.patients[0];
+        } else if (Array.isArray(result.patients)) {
+          // Si es un array normal, usarlo directamente
+          processedPatients = result.patients;
         }
         
-        console.log('[Dispositivos] Pacientes procesados: ', JSON.stringify(processedPatients));
+        // Verificar datos de pacientes
+        console.log(`[Dispositivos] Número de pacientes procesados: ${processedPatients.length}`);
+        
+        // Filtrar pacientes inválidos o arrays anidados
+        const filteredPatients = processedPatients.filter(patient => {
+          // Verificar que no sea un array
+          if (Array.isArray(patient)) {
+            console.log('[Dispositivos] Descartando paciente que es un array:', JSON.stringify(patient));
+            return false;
+          }
+          
+          // Verificar que tenga datos básicos necesarios
+          if (!patient || typeof patient !== 'object') {
+            console.log('[Dispositivos] Descartando paciente inválido (no es un objeto)');
+            return false;
+          }
+          
+          // Verificar que tenga ID y nombre
+          const hasId = patient.id_pc || patient.id;
+          const hasName = patient.nombre || patient.name;
+          
+          if (!hasId || !hasName) {
+            console.log('[Dispositivos] Descartando paciente sin ID o nombre:', JSON.stringify(patient));
+            return false;
+          }
+          
+          return true;
+        });
+        
+        console.log(`[Dispositivos] Pacientes válidos después de filtrado: ${filteredPatients.length}`);
         
         // Asegurarse de que los pacientes tengan ID
-        const validatedPatients = processedPatients.map(patient => {
+        const validatedPatients = filteredPatients.map(patient => {
           if (!patient.id_pc && patient.id) {
             console.log(`[Dispositivos] Paciente con id=${patient.id} no tiene id_pc, añadiendo`);
             return {
@@ -115,12 +163,19 @@ export default function DispositivosScreen() {
           return patient;
         });
         
-        console.log('[Dispositivos] Pacientes validados: ', JSON.stringify(validatedPatients));
+        // Eliminar posibles duplicados basados en ID
+        const uniquePatients = Array.from(
+          new Map(validatedPatients.map(patient => 
+            [(patient.id_pc || patient.id), patient]
+          )).values()
+        );
         
-        setPatients(validatedPatients);
-        if (validatedPatients.length > 0) {
-          console.log(`[Dispositivos] Seleccionando paciente: ${JSON.stringify(validatedPatients[0])}`);
-          setSelectedPatient(validatedPatients[0]);
+        console.log(`[Dispositivos] Pacientes únicos después de validación: ${uniquePatients.length}`);
+        
+        setPatients(uniquePatients);
+        if (uniquePatients.length > 0) {
+          console.log(`[Dispositivos] Seleccionando primer paciente: ${JSON.stringify(uniquePatients[0])}`);
+          setSelectedPatient(uniquePatients[0]);
         }
       } else {
         console.log('[Dispositivos] No se encontraron pacientes');
@@ -208,29 +263,45 @@ export default function DispositivosScreen() {
         horizontal 
         showsHorizontalScrollIndicator={false}
         style={styles.chipContainer}
+        contentContainerStyle={styles.chipContentContainer}
       >
         {patients.map((patient, index) => {
+          // Verificar que el paciente sea válido
+          if (!patient || typeof patient !== 'object' || Array.isArray(patient)) {
+            console.log('[Dispositivos] Saltando paciente inválido en renderizado');
+            return null;
+          }
+          
           // Manejar diferentes campos según la estructura que venga de la API
           const name = patient.name || patient.nombre || '';
           const lastName = patient.last_name || patient.apellido_p || patient.apellido || '';
           const patientId = patient.id_pc || patient.id;
           
+          // Verificar que tengamos ID y nombre
+          if (!patientId || !name) {
+            console.log('[Dispositivos] Saltando paciente sin ID o nombre en renderizado');
+            return null;
+          }
+          
+          const isSelected = Boolean(selectedPatient && 
+            patientId === (selectedPatient.id_pc || selectedPatient.id));
+          
           return (
             <Chip
-              key={patientId || index}
-              selected={Boolean(selectedPatient && patientId === (selectedPatient.id_pc || selectedPatient.id))}
+              key={`patient-${patientId}-${index}`}
+              selected={isSelected}
               onPress={() => setSelectedPatient(patient)}
               style={[
                 styles.chip,
-                selectedPatient && patientId === (selectedPatient.id_pc || selectedPatient.id) ? styles.selectedChip : undefined
+                isSelected ? styles.selectedChip : undefined
               ]}
-              textStyle={selectedPatient && patientId === (selectedPatient.id_pc || selectedPatient.id) ? styles.selectedChipText : undefined}
-              avatar={<Ionicons name="person-circle" size={20} color={selectedPatient && patientId === (selectedPatient.id_pc || selectedPatient.id) ? "#fff" : "#666"} />}
+              textStyle={isSelected ? styles.selectedChipText : undefined}
+              avatar={<Ionicons name="person-circle" size={20} color={isSelected ? "#fff" : "#666"} />}
             >
-              {`${name} ${lastName}`}
+              {`${name} ${lastName}`.trim()}
             </Chip>
           );
-        })}
+        }).filter(Boolean)}
       </ScrollView>
     );
   };
@@ -265,6 +336,107 @@ export default function DispositivosScreen() {
         </View>
       </View>
     );
+  };
+
+  // Función para manejar el cambio de fecha
+  const onDateChange = (event: any, selectedDate?: Date) => {
+    const currentDate = selectedDate || new Date();
+    setShowDatePicker(Platform.OS === 'ios');
+    setSelectedDate(currentDate);
+  };
+
+  // Función para manejar el cambio de hora
+  const onTimeChange = (event: any, selectedTime?: Date) => {
+    const currentTime = selectedTime || new Date();
+    setShowTimePicker(Platform.OS === 'ios');
+    setSelectedTime(currentTime);
+  };
+
+  // Función para crear una nueva cita
+  const handleCreateAppointment = async () => {
+    if (!selectedPatient || !doctorProfile) {
+      Alert.alert('Error', 'No se ha seleccionado un paciente o no se ha cargado el perfil del doctor.');
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+
+      // Formatear la fecha y hora para el API
+      const formattedDate = format(selectedDate, 'yyyy-MM-dd');
+      const formattedTime = format(selectedTime, 'HH:mm:ss');
+
+      // Obtener el ID del paciente, asegurando que sea un número válido
+      const patientId = selectedPatient.id_pc || selectedPatient.id;
+      if (!patientId) {
+        Alert.alert('Error', 'No se pudo determinar el ID del paciente.');
+        setSubmitting(false);
+        return;
+      }
+
+      // Crear objeto de cita con todos los campos requeridos
+      const appointmentData = {
+        id_pc: patientId, 
+        id_dc: doctorProfile.id_dc,
+        date: formattedDate,
+        time: formattedTime,
+        payment_amount: 0, // Valor por defecto requerido por la API
+        notes: notes || 'Cita agendada por el doctor'
+      };
+
+      console.log('[Dispositivos] Creando cita con datos:', appointmentData);
+
+      // Llamar al servicio para crear la cita
+      const result = await AppointmentService.createAppointment(appointmentData);
+
+      if (result) {
+        // Actualizar el estado de la cita a "completed" (aceptada)
+        if (result.id_ap) {
+          await AppointmentService.updateAppointmentStatus(result.id_ap, 'completed');
+        }
+
+        Alert.alert(
+          'Éxito',
+          'La cita ha sido agendada correctamente.',
+          [{ text: 'OK', onPress: () => {
+            // Limpiar formulario
+            setNotes('');
+            setShowModal(false);
+            
+            // Recargar cita del paciente
+            if (patientId) {
+              loadLatestAppointment(patientId);
+            }
+          }}]
+        );
+      } else {
+        Alert.alert('Error', 'No se pudo agendar la cita. Intente nuevamente.');
+      }
+    } catch (error) {
+      console.error('[Dispositivos] Error al crear cita:', error);
+      Alert.alert('Error', 'Ha ocurrido un error al intentar agendar la cita. Intente nuevamente.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Función para abrir modal con datos limpios
+  const openAppointmentModal = () => {
+    // Inicializar fecha para hoy
+    setSelectedDate(new Date());
+    
+    // Inicializar hora para la próxima hora en punto
+    const nextHour = new Date();
+    nextHour.setHours(nextHour.getHours() + 1);
+    nextHour.setMinutes(0);
+    nextHour.setSeconds(0);
+    setSelectedTime(nextHour);
+    
+    // Limpiar notas
+    setNotes('');
+    
+    // Mostrar modal
+    setShowModal(true);
   };
 
   if (loading) {
@@ -322,7 +494,7 @@ export default function DispositivosScreen() {
                   </Paragraph>
                   <Button 
                     mode="contained" 
-                    onPress={() => router.push('/citas/agendar')}
+                    onPress={() => setShowModal(true)}
                     style={styles.scheduleButton}
                   >
                     Agendar Cita
@@ -333,6 +505,88 @@ export default function DispositivosScreen() {
           </View>
         )}
       </ScrollView>
+
+      {showModal && (
+        <Modal
+          animationType="slide"
+          transparent={true}
+          visible={showModal}
+          onRequestClose={() => setShowModal(false)}
+        >
+          <TouchableOpacity
+            style={styles.modalContainer}
+            activeOpacity={1}
+            onPress={() => setShowModal(false)}
+          >
+            <View 
+              style={styles.modalContent}
+              onStartShouldSetResponder={() => true}
+              onTouchEnd={(e) => e.stopPropagation()}
+            >
+              <Text style={styles.modalTitle}>Agendar Cita</Text>
+              
+              <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Fecha:</Text>
+                <Text style={styles.inputValue}>{format(selectedDate, 'dd/MM/yyyy', { locale: es })}</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity onPress={() => setShowTimePicker(true)} style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Hora:</Text>
+                <Text style={styles.inputValue}>{format(selectedTime, 'HH:mm', { locale: es })}</Text>
+              </TouchableOpacity>
+              
+              <TextInput
+                label="Notas para la cita"
+                value={notes}
+                onChangeText={setNotes}
+                mode="outlined"
+                multiline
+                numberOfLines={3}
+                style={styles.notesInput}
+              />
+              
+              {showDatePicker && (
+                <DateTimePicker
+                  value={selectedDate}
+                  mode="date"
+                  display="default"
+                  onChange={onDateChange}
+                  minimumDate={new Date()}
+                />
+              )}
+              
+              {showTimePicker && (
+                <DateTimePicker
+                  value={selectedTime}
+                  mode="time"
+                  display="default"
+                  onChange={onTimeChange}
+                  minuteInterval={15}
+                />
+              )}
+              
+              <View style={styles.buttonRow}>
+                <Button
+                  mode="outlined"
+                  onPress={() => setShowModal(false)}
+                  style={styles.cancelButton}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  mode="contained"
+                  onPress={handleCreateAppointment}
+                  style={styles.submitButton}
+                  loading={submitting}
+                  disabled={submitting}
+                >
+                  Agendar
+                </Button>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -364,6 +618,10 @@ const styles = StyleSheet.create({
   chipContainer: {
     padding: 16,
     flexDirection: 'row',
+  },
+  chipContentContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
   },
   chip: {
     marginRight: 8,
@@ -428,6 +686,67 @@ const styles = StyleSheet.create({
   },
   scheduleButton: {
     marginTop: 8,
+    backgroundColor: '#FF9F1C',
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    padding: 20,
+    borderRadius: 20,
+    width: '90%',
+    maxWidth: 500,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    textAlign: 'center',
+    color: '#2E7D32',
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    backgroundColor: '#f8f8f8',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  inputLabel: {
+    fontWeight: 'bold',
+    marginRight: 8,
+    fontSize: 16,
+    color: '#444',
+    width: 60,
+  },
+  inputValue: {
+    fontWeight: 'normal',
+    fontSize: 16,
+    color: '#333',
+  },
+  notesInput: {
+    marginBottom: 20,
+    backgroundColor: '#fff',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  cancelButton: {
+    flex: 1,
+    marginRight: 10,
+    borderColor: '#FF9F1C',
+  },
+  submitButton: {
+    flex: 1,
+    marginLeft: 10,
     backgroundColor: '#FF9F1C',
   },
 });
